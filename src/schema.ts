@@ -176,13 +176,36 @@ const clip = (value: unknown, max: number): unknown => {
   const space = cut.lastIndexOf(" ");
   return (space > max * 0.6 ? cut.slice(0, space) : cut).trimEnd() + "…";
 };
+const KNOWN_STEP_TYPES = new Set([
+  "open_app", "media_search", "web_search", "compose_message", "send_message", "navigate",
+  "share_post", "dial", "delete_email", "create_reminder", "show_draft",
+]);
+/** Names of steps the model invented (action names only, never content), for diagnostics. */
+export function unknownStepTypes(output: unknown): string[] {
+  const steps = (output as { steps?: unknown } | null)?.steps;
+  if (!Array.isArray(steps)) return [];
+  return steps
+    .map((st) => (typeof st === "object" && st !== null ? (st as { type?: unknown }).type : undefined))
+    .filter((t) => typeof t !== "string" || !KNOWN_STEP_TYPES.has(t))
+    .map((t) => String(t).replace(/[^A-Za-z0-9_ -]/g, "").slice(0, 30));
+}
 export function clampPlanOutput(output: unknown): unknown {
   if (typeof output !== "object" || output === null) return output;
-  const plan = { ...(output as Record<string, unknown>) };
+  const original = output as Record<string, unknown>;
+  const plan = { ...original };
+  // Nothing runnable AND nothing to say: keep the output as is so validation rejects it (the phone then falls back).
+  if (Array.isArray(original.steps) && original.steps.length > 0) {
+    const anyKnown = original.steps.some((st) => typeof st === "object" && st !== null && KNOWN_STEP_TYPES.has(String((st as { type?: unknown }).type)));
+    const hasSay = typeof original.say === "string" && original.say.trim().length > 0;
+    if (!anyKnown && !hasSay) return output;
+  }
   plan.say = clip(plan.say, 300);
   plan.note = clip(plan.note, 300);
   if (Array.isArray(plan.steps)) {
-    plan.steps = plan.steps.map((step) => {
+    // An invented action type can never run on the phone: drop that step and keep the valid ones.
+    plan.steps = plan.steps
+      .filter((st) => typeof st === "object" && st !== null && KNOWN_STEP_TYPES.has(String((st as { type?: unknown }).type)))
+      .map((step) => {
       if (typeof step !== "object" || step === null) return step;
       const s = { ...(step as Record<string, unknown>) };
       const type = s.type;

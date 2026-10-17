@@ -182,3 +182,14 @@ describe("YouTube resolver", () => {
     await expect(failing.youtube({ app: "youtube", query: "x" }, new AbortController().signal)).rejects.toMatchObject({ kind: "upstream" });
   });
 });
+
+describe("invented action types", () => {
+  it("drops an unknown step but keeps the valid ones", async () => {
+    const out = { steps: [{ type: "answer", text: "x" }, { type: "show_draft", kind: "text", title: "Συνταγή", text: "Ζυμάρι…" }], note: "", say: "Ορίστε." };
+    const a = createApp({ devices: registry, provider: fixed(out) });
+    const res = await a.request("/v1/plan", { method: "POST", headers: auth, body: plan("πώς φτιάχνω πίτσα") });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { plan: { steps: { type: string }[] } };
+    expect(body.plan.steps.map((s) => s.type)).toEqual(["show_draft"]);
+  });
+});

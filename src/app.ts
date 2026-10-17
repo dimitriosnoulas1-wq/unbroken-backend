@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
-import { MediaRequest, Plan, PlanRequest, VIDEO_ID, clampPlanOutput, toWire } from "./schema.js";
+import { MediaRequest, Plan, PlanRequest, VIDEO_ID, clampPlanOutput, toWire, unknownStepTypes } from "./schema.js";
 import { NoMediaResolver, ProviderError, type MediaResolver, type PlanProvider } from "./providers.js";
 import { DeviceRegistry, RateLimiter } from "./security.js";
 
@@ -145,6 +145,8 @@ export function createApp(deps: AppDeps) {
         clearTimeout(timer);
       }
 
+      const dropped = unknownStepTypes(output);
+      if (dropped.length > 0) log({ requestId: c.get("requestId"), event: "dropped_steps", types: dropped.slice(0, 5) });
       const plan = Plan.safeParse(clampPlanOutput(output));
       if (!plan.success) {
         // Metadata only: which fields failed and why, never their values.

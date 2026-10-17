@@ -166,16 +166,46 @@ const flatStep = {
   },
 } as const;
 
+/** Key names (never values) of steps that have no usable type, for diagnostics. */
+export function untypedStepKeys(output: unknown): string[] {
+  const steps = (output as { steps?: unknown } | null)?.steps;
+  if (!Array.isArray(steps)) return [];
+  return steps
+    .filter((st) => typeof st === "object" && st !== null && !KNOWN_STEP_TYPES.has(String((st as { type?: unknown }).type)))
+    .map((st) => Object.keys(st as object).map((k) => k.replace(/[^A-Za-z0-9_]/g, "").slice(0, 20)).slice(0, 14).join(","));
+}
+
+/** Last resort when the model omits `type`: the field names say which action it meant. */
+export function inferStepType(raw: Record<string, unknown>): string | undefined {
+  const has = (k: string) => typeof raw[k] === "string" && (raw[k] as string).length > 0;
+  if (has("recipient") && has("body")) return "send_message";
+  if (has("contact") || has("number")) return "dial";
+  if (has("startIso")) return "create_reminder";
+  if (has("platform")) return "share_post";
+  if (has("target")) return "navigate";
+  if (has("kind") && has("text")) return "show_draft";
+  if (has("app") && has("query")) return "media_search";
+  if (has("app")) return "open_app";
+  if (has("query")) return "web_search";
+  return undefined;
+}
+
 export function expandGeminiSteps(output: unknown): unknown {
   if (typeof output !== "object" || output === null) return output;
   const plan = { ...(output as Record<string, unknown>) };
   if (!Array.isArray(plan.steps)) return plan;
   plan.steps = plan.steps.map((st) => {
     if (typeof st !== "object" || st === null) return st;
-    const raw = st as Record<string, unknown>;
-    const fields = typeof raw.type === "string" ? STEP_FIELDS[raw.type] : undefined;
-    if (!fields) return st; // unknown/missing type: left alone, the validator drops or rejects it
-    return { type: raw.type, ...Object.fromEntries(fields.map((f) => [f, raw[f] ?? ""])) };
+    let raw = st as Record<string, unknown>;
+    // {"send_message": {...}} wrapper form
+    const only = Object.keys(raw);
+    if (only.length === 1 && STEP_FIELDS[only[0]!] && typeof raw[only[0]!] === "object" && raw[only[0]!] !== null) {
+      raw = { type: only[0], ...(raw[only[0]!] as Record<string, unknown>) };
+    }
+    const type = typeof raw.type === "string" && STEP_FIELDS[raw.type] ? raw.type : inferStepType(raw);
+    const fields = type ? STEP_FIELDS[type] : undefined;
+    if (!type || !fields) return st; // unknown: left alone, the validator drops or rejects it
+    return { type, ...Object.fromEntries(fields.map((f) => [f, raw[f] ?? ""])) };
   });
   return plan;
 }

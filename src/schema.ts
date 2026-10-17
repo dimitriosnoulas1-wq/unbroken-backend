@@ -1,0 +1,201 @@
+import { z } from "zod";
+
+/**
+ * Mirrors app/src/main/java/gr/voiceagent/agent/Actions.kt exactly. The phone decodes
+ * strictly (unknown keys or types are rejected), and validates every step again with
+ * its own ActionRegistry before showing it, so this is defence in depth.
+ */
+const FORBIDDEN = /\b(?:javascript|intent|file|content):/i;
+const text = (max: number) =>
+  z.string().max(max).refine((s) => !FORBIDDEN.test(s), { message: "forbidden scheme" });
+
+export const MEDIA_APPS = ["youtube", "spotify"] as const;
+export const CHANNELS = ["sms", "whatsapp", "viber", "messenger", "email", "share", ""] as const;
+export const PLATFORMS = ["x", "linkedin", "facebook", "instagram", "share", ""] as const;
+export const DRAFT_KINDS = ["ad", "summary", "message", "text"] as const;
+export const NAVIGATE_TARGETS = ["back", "home", "recents", "notifications"] as const;
+
+export const Action = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("open_app"), app: text(80) }),
+  z.object({ type: z.literal("media_search"), app: z.enum(MEDIA_APPS), query: text(300) }),
+  z.object({ type: z.literal("web_search"), query: text(300) }),
+  z.object({ type: z.literal("compose_message"), channel: z.enum(CHANNELS), recipient: text(80), body: text(3000) }),
+  // No address field: the phone resolves recipients from its own contacts, never from the model.
+  z.strictObject({ type: z.literal("send_message"), channel: z.enum(CHANNELS), recipient: text(80), body: text(3000) }),
+  z.object({ type: z.literal("navigate"), target: z.enum(NAVIGATE_TARGETS) }),
+  z.object({ type: z.literal("share_post"), platform: z.enum(PLATFORMS), text: text(3000) }),
+  z.object({ type: z.literal("dial"), contact: text(80), number: z.string().regex(/^(\+?[0-9][0-9 ()-]{2,19})?$/) }),
+  z.object({ type: z.literal("delete_email"), query: text(300) }),
+  z.object({ type: z.literal("create_reminder"), title: text(200), startIso: z.string().max(40) }),
+  z.object({ type: z.literal("show_draft"), kind: z.enum(DRAFT_KINDS), title: text(120), text: text(6000).min(1) }),
+]);
+export type Action = z.infer<typeof Action>;
+
+export const Clarification = z.object({
+  question: text(300).min(1),
+  slot: z.literal("free").default("free"),
+  options: z.array(text(60)).max(6).default([]),
+});
+
+export const MAX_STEPS = 5;
+
+export const Plan = z.object({
+  steps: z.array(Action).max(MAX_STEPS),
+  clarification: Clarification.nullable().optional(),
+  note: text(300).default(""),
+  /** Short spoken reply in Greek (answers, what will happen). Never claims that anything was done. */
+  say: text(300).default(""),
+});
+export type Plan = z.infer<typeof Plan>;
+
+export const PlanRequest = z.strictObject({
+  transcript: z.string().trim().min(1).max(1000),
+  locale: z.string().max(16).default("el-GR"),
+  context: z
+    .strictObject({ previousTranscript: z.string().max(1000), question: z.string().max(300) })
+    .nullable()
+    .optional(),
+  /** Earlier turns of the same conversation, text only. */
+  history: z
+    .array(z.strictObject({ role: z.enum(["user", "assistant", "result"]), text: z.string().max(500) }))
+    .max(8)
+    .default([]),
+  clientVersion: z.string().max(40),
+});
+export type PlanRequest = z.infer<typeof PlanRequest>;
+
+export const MediaRequest = z.strictObject({
+  app: z.literal("youtube"),
+  query: z.string().trim().min(1).max(300),
+});
+export type MediaRequest = z.infer<typeof MediaRequest>;
+
+export const VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
+
+/** Wire format sent to the phone: no nulls, all defaults present. */
+export function toWire(plan: Plan) {
+  return {
+    steps: plan.steps,
+    ...(plan.clarification ? { clarification: plan.clarification } : {}),
+    note: plan.note,
+    say: plan.say,
+  };
+}
+
+/**
+ * JSON Schema for structured output (strict: every property required, no additional
+ * properties). The model can only produce these shapes. OpenAI strict mode receives
+ * this object as-is. Gemini receives {@link geminiPlanSchema}, which writes a nullable
+ * `clarification` as `type: ["object", "null"]` — the form Gemini documents — instead
+ * of `anyOf` with `{type: "null"}`. The phone wire format and the zod `Plan` do not change.
+ */
+const str = { type: "string" } as const;
+const obj = (type: string, props: Record<string, unknown>) => ({
+  type: "object",
+  additionalProperties: false,
+  required: ["type", ...Object.keys(props)],
+  properties: { type: { type: "string", enum: [type] }, ...props },
+});
+
+export const PLAN_JSON_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["steps", "clarification", "note", "say"],
+  properties: {
+    steps: {
+      type: "array",
+      maxItems: MAX_STEPS,
+      items: {
+        anyOf: [
+          obj("open_app", { app: str }),
+          obj("media_search", { app: { type: "string", enum: MEDIA_APPS }, query: str }),
+          obj("web_search", { query: str }),
+          obj("compose_message", { channel: { type: "string", enum: CHANNELS }, recipient: str, body: str }),
+          obj("send_message", { channel: { type: "string", enum: CHANNELS }, recipient: str, body: str }),
+          obj("navigate", { target: { type: "string", enum: NAVIGATE_TARGETS } }),
+          obj("share_post", { platform: { type: "string", enum: PLATFORMS }, text: str }),
+          obj("dial", { contact: str, number: str }),
+          obj("delete_email", { query: str }),
+          obj("create_reminder", { title: str, startIso: str }),
+          obj("show_draft", { kind: { type: "string", enum: DRAFT_KINDS }, title: str, text: str }),
+        ],
+      },
+    },
+    clarification: {
+      anyOf: [
+        { type: "null" },
+        {
+          type: "object",
+          additionalProperties: false,
+          required: ["question", "slot", "options"],
+          properties: { question: str, slot: { type: "string", enum: ["free"] }, options: { type: "array", items: str } },
+        },
+      ],
+    },
+    note: str,
+    say: str,
+  },
+} as const;
+
+/** Same plan schema, with Gemini's documented nullable-object form for `clarification`. */
+export function geminiPlanSchema() {
+  const schema = structuredClone(PLAN_JSON_SCHEMA);
+  const objectVariant = schema.properties.clarification.anyOf.find((variant) => variant.type === "object");
+  if (!objectVariant) throw new Error("plan schema clarification has no object variant");
+  return {
+    ...schema,
+    properties: {
+      ...schema.properties,
+      clarification: {
+        type: ["object", "null"] as ["object", "null"],
+        additionalProperties: objectVariant.additionalProperties,
+        required: objectVariant.required,
+        properties: objectVariant.properties,
+      },
+    },
+  };
+}
+
+/**
+ * Models sometimes exceed a length limit by a few characters. Shorten the free-text fields
+ * instead of rejecting the whole plan (the phone would then fall back to no AI at all).
+ * Only lengths change; types, enums and the action list are still validated strictly.
+ */
+const CLAMPS: Record<string, number> = {
+  say: 300,
+  note: 300,
+  title: 200,
+  text: 6000,
+  body: 3000,
+  query: 300,
+  question: 300,
+};
+const clip = (value: unknown, max: number): unknown => {
+  if (typeof value !== "string" || value.length <= max) return value;
+  const cut = value.slice(0, max - 1);
+  const space = cut.lastIndexOf(" ");
+  return (space > max * 0.6 ? cut.slice(0, space) : cut).trimEnd() + "…";
+};
+export function clampPlanOutput(output: unknown): unknown {
+  if (typeof output !== "object" || output === null) return output;
+  const plan = { ...(output as Record<string, unknown>) };
+  plan.say = clip(plan.say, 300);
+  plan.note = clip(plan.note, 300);
+  if (Array.isArray(plan.steps)) {
+    plan.steps = plan.steps.map((step) => {
+      if (typeof step !== "object" || step === null) return step;
+      const s = { ...(step as Record<string, unknown>) };
+      const type = s.type;
+      if (type === "show_draft") {
+        s.title = clip(s.title, 120);
+        s.text = clip(s.text, 6000);
+      } else {
+        for (const k of ["title", "body", "query", "text"]) if (k in s) s[k] = clip(s[k], CLAMPS[k] ?? 300);
+      }
+      return s;
+    });
+  }
+  const c = plan.clarification;
+  if (typeof c === "object" && c !== null) plan.clarification = { ...(c as Record<string, unknown>), question: clip((c as Record<string, unknown>).question, 300) };
+  return plan;
+}

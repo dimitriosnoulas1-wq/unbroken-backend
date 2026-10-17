@@ -218,3 +218,14 @@ describe("Gemini plan through the app", () => {
     expect(JSON.stringify(json)).not.toContain(KEY);
   });
 });
+
+describe("flat Gemini steps", () => {
+  it("expands flat steps into strict typed steps", async () => {
+    const { expandGeminiSteps } = await import("../src/schema.js");
+    const out = expandGeminiSteps({
+      steps: [{ type: "send_message", app: "", query: "", channel: "messenger", recipient: "Νίκο", body: "γεια", target: "", platform: "", text: "", contact: "", number: "", title: "", startIso: "", kind: "" }],
+      clarification: null, note: "", say: "",
+    }) as { steps: unknown[] };
+    expect(out.steps).toEqual([{ type: "send_message", channel: "messenger", recipient: "Νίκο", body: "γεια" }]);
+  });
+});

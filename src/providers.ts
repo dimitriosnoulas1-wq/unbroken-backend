@@ -1,4 +1,4 @@
-import { PLAN_JSON_SCHEMA, VIDEO_ID, geminiPlanSchema, type MediaRequest, type PlanRequest } from "./schema.js";
+import { PLAN_JSON_SCHEMA, VIDEO_ID, expandGeminiSteps, geminiPlanSchema, type MediaRequest, type PlanRequest } from "./schema.js";
 import { SYSTEM_PROMPT, userMessage } from "./prompt.js";
 
 export const DEFAULT_GEMINI_MODEL = "gemini-3.5-flash-lite";
@@ -156,7 +156,7 @@ export class GeminiProvider implements PlanProvider {
       throw new ProviderError(blocked ? "blocked" : "no content", "invalid");
     }
     try {
-      return JSON.parse(text);
+      return expandGeminiSteps(JSON.parse(text));
     } catch {
       throw new ProviderError("not json", "invalid");
     }

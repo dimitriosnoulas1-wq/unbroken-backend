@@ -138,6 +138,48 @@ export const PLAN_JSON_SCHEMA = {
 } as const;
 
 /** Same plan schema, with Gemini's documented nullable-object form for `clarification`. */
+/**
+ * Gemini drops the `type` discriminator from `anyOf` step variants (steps arrive without a type),
+ * so Gemini gets ONE flat step object with a required `type` enum; unused fields are "".
+ * {@link expandGeminiSteps} turns each flat step back into the strict typed shape.
+ */
+const STEP_FIELDS: Record<string, string[]> = {
+  open_app: ["app"],
+  media_search: ["app", "query"],
+  web_search: ["query"],
+  compose_message: ["channel", "recipient", "body"],
+  send_message: ["channel", "recipient", "body"],
+  navigate: ["target"],
+  share_post: ["platform", "text"],
+  dial: ["contact", "number"],
+  delete_email: ["query"],
+  create_reminder: ["title", "startIso"],
+  show_draft: ["kind", "title", "text"],
+};
+const FLAT_FIELDS = ["app", "query", "channel", "recipient", "body", "target", "platform", "text", "contact", "number", "title", "startIso", "kind"];
+const flatStep = {
+  type: "object",
+  required: ["type", ...FLAT_FIELDS],
+  properties: {
+    type: { type: "string", enum: Object.keys(STEP_FIELDS) },
+    ...Object.fromEntries(FLAT_FIELDS.map((f) => [f, str])),
+  },
+} as const;
+
+export function expandGeminiSteps(output: unknown): unknown {
+  if (typeof output !== "object" || output === null) return output;
+  const plan = { ...(output as Record<string, unknown>) };
+  if (!Array.isArray(plan.steps)) return plan;
+  plan.steps = plan.steps.map((st) => {
+    if (typeof st !== "object" || st === null) return st;
+    const raw = st as Record<string, unknown>;
+    const fields = typeof raw.type === "string" ? STEP_FIELDS[raw.type] : undefined;
+    if (!fields) return st; // unknown/missing type: left alone, the validator drops or rejects it
+    return { type: raw.type, ...Object.fromEntries(fields.map((f) => [f, raw[f] ?? ""])) };
+  });
+  return plan;
+}
+
 export function geminiPlanSchema() {
   const schema = structuredClone(PLAN_JSON_SCHEMA);
   const objectVariant = schema.properties.clarification.anyOf.find((variant) => variant.type === "object");
@@ -146,6 +188,7 @@ export function geminiPlanSchema() {
     ...schema,
     properties: {
       ...schema.properties,
+      steps: { type: "array", maxItems: MAX_STEPS, items: flatStep },
       clarification: {
         type: ["object", "null"] as ["object", "null"],
         additionalProperties: objectVariant.additionalProperties,

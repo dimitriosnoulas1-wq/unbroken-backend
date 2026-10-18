@@ -375,3 +375,30 @@ describe("in-app find never becomes a web search (real-device Bauke failure)", (
     expect(guardPlan(web, "βρες τον καιρό")).toBe(web);
   });
 });
+
+describe("suspend and resume (ask)", () => {
+  const body = JSON.stringify({ goal: "Στο Instagram βρες τον Bauke και γράψε του «γεια» χωρίς να το στείλεις", app: "com.instagram.android", step: 3, screen: "[4] TextView \"Bauke Jansen\" ≈όνομα\n[5] TextView \"bauke_92\" ≈όνομα\n", clientVersion: "2.1" });
+  const post = (output: unknown) =>
+    createApp({ devices: registry, provider: { name: "t", plan: async () => ({}), screenStep: async () => output } as PlanProvider })
+      .request("/v1/screen/step", { method: "POST", headers: auth, body });
+
+  it("accepts ask with a question and candidates", async () => {
+    const res = await post({ action: "ask", node: -1, text: "Bauke Jansen | bauke_92", app: "", say: "Ποιο από τα δύο προφίλ;" });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { step: { action: string; text: string } }).step).toMatchObject({ action: "ask", text: "Bauke Jansen | bauke_92" });
+  });
+
+  it("rejects ask without a question", async () => {
+    const res = await post({ action: "ask", node: -1, text: "a | b", app: "", say: " " });
+    expect(res.status).toBe(502);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe("invalid_step_say:custom");
+  });
+
+  it("tells the model to ask instead of failing or guessing, to keep progress notes and to recover in place", async () => {
+    const { SCREEN_PROMPT } = await import("../src/prompt.js");
+    expect(SCREEN_PROMPT).toContain("ask {say, text}");
+    expect(SCREEN_PROMPT).toContain("σημείωση:");
+    expect(SCREEN_PROMPT).toContain("ΣΥΝΕΧΙΣΕ προς τον ΙΔΙΟ στόχο");
+    expect(SCREEN_PROMPT).not.toContain("κάνε fail και γράψε στο say τα ονόματα");
+  });
+});

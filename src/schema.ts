@@ -352,7 +352,7 @@ export function clampPlanOutput(output: unknown): unknown {
 // ---------------------------------------------------------------------------------------
 export const SCREEN_ACTIONS = [
   "tap", "long_press", "type", "enter", "scroll_down", "scroll_up", "swipe_left", "swipe_right",
-  "back", "home", "open_app", "open_url", "wait", "done", "fail",
+  "back", "home", "open_app", "open_url", "wait", "ask", "done", "fail",
 ] as const;
 
 const clipTo = (n: number) => z.string().transform((v) => v.slice(0, n));
@@ -379,6 +379,8 @@ export const ScreenStep = z.object({
   say: z.string().max(200),
 }).superRefine((s, ctx) => {
   // The phone checks again; an open_url without a plain web address is never sent to it.
+  // A question to the user must say what it asks; the phone shows the candidates from text.
+  if (s.action === "ask" && !s.say.trim()) ctx.addIssue({ code: "custom", path: ["say"], message: "ask needs a question" });
   if (s.action === "open_url" && !/^https?:\/\/[^\s/?#@]+(?:[/?#]\S*)?$/i.test(s.text)) {
     ctx.addIssue({ code: "custom", path: ["text"], message: "open_url needs an http(s) URL" });
   }

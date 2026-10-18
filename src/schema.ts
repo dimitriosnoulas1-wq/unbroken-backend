@@ -289,7 +289,13 @@ export function clampPlanOutput(output: unknown): unknown {
         const m = st as { type?: string; channel?: unknown; recipient?: unknown; body?: unknown };
         if ((m.type === "send_message" || m.type === "compose_message") && !(CHANNELS as readonly string[]).includes(String(m.channel))) {
           const where = String(m.channel ?? "").slice(0, 30);
-          return { type: "screen_task", goal: `Στο ${where} στείλε στον/στην ${String(m.recipient ?? "")} το μήνυμα «${String(m.body ?? "")}»`.slice(0, 500) };
+          const who = String(m.recipient ?? "");
+          const text = String(m.body ?? "");
+          // compose_message only prepares the text; the phone refuses to press Send for a goal marked like this.
+          const goal = m.type === "send_message"
+            ? `Στο ${where} στείλε στον/στην ${who} το μήνυμα «${text}»`
+            : `Στο ${where} γράψε στον/στην ${who} το μήνυμα «${text}» χωρίς να το στείλεις`;
+          return { type: "screen_task", goal: goal.slice(0, 500) };
         }
         return st;
       })

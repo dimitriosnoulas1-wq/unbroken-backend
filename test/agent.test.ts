@@ -207,4 +207,18 @@ describe("unsupported message channel", () => {
       expect(JSON.stringify(out.data.steps[0])).toContain("γεια");
     }
   });
+
+  it("keeps a compose on an unsupported channel a draft, never a send", async () => {
+    const { clampPlanOutput, Plan } = await import("../src/schema.js");
+    const out = Plan.safeParse(clampPlanOutput({
+      steps: [{ type: "compose_message", channel: "instagram", recipient: "Ιωάννα", body: "γεια" }],
+      clarification: null, note: "", say: "",
+    }));
+    expect(out.success).toBe(true);
+    if (out.success) {
+      const goal = (out.data.steps[0] as { goal: string }).goal;
+      expect(goal).toContain("χωρίς να το στείλεις");
+      expect(goal).not.toContain("στείλε στον");
+    }
+  });
 });

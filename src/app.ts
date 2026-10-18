@@ -176,7 +176,10 @@ export function createApp(deps: AppDeps) {
         return error(c, 400, "bad_json", "Body is not valid JSON");
       }
       const parsed = ScreenStepRequest.safeParse(raw);
-      if (!parsed.success) return error(c, 400, "bad_request", "Request does not match the schema");
+      if (!parsed.success) {
+        log({ requestId: c.get("requestId"), event: "bad_screen_request", issues: parsed.error.issues.slice(0, 5).map((i) => `${i.path.join(".")}:${i.code}`) });
+        return error(c, 400, "bad_request", "Request does not match the schema");
+      }
 
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);

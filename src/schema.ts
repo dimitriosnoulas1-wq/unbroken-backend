@@ -318,17 +318,19 @@ export function clampPlanOutput(output: unknown): unknown {
 // ---------------------------------------------------------------------------------------
 export const SCREEN_ACTIONS = ["tap", "type", "enter", "scroll_down", "scroll_up", "back", "home", "open_app", "wait", "done", "fail"] as const;
 
+const clipTo = (n: number) => z.string().transform((v) => v.slice(0, n));
+
 export const ScreenStepRequest = z.strictObject({
-  goal: z.string().trim().min(1).max(500),
+  goal: z.string().trim().min(1).transform((v) => v.slice(0, 500)),
   /** Package name of the app in front. */
-  app: z.string().max(120).default(""),
+  app: clipTo(120).default(""),
   step: z.number().int().min(0).max(60).default(0),
   /** Compact numbered list of what is on screen, built on the phone. */
-  screen: z.string().max(9000),
-  history: z.array(z.string().max(160)).max(14).default([]),
+  screen: clipTo(9000),
+  history: z.array(clipTo(160)).default([]).transform((v) => v.slice(-14)),
   /** Launchable app labels, sent on the first step. */
-  apps: z.array(z.string().max(40)).max(120).default([]),
-  clientVersion: z.string().max(40),
+  apps: z.array(clipTo(40)).default([]).transform((v) => v.slice(0, 120)),
+  clientVersion: clipTo(40),
 });
 export type ScreenStepRequest = z.infer<typeof ScreenStepRequest>;
 

@@ -193,7 +193,10 @@ export function createApp(deps: AppDeps) {
         ]);
       } catch (e) {
         if (e instanceof ProviderError && e.kind === "timeout") return error(c, 504, "provider_timeout", "The AI provider timed out");
-        if (e instanceof ProviderError && e.kind === "invalid") return error(c, 502, "invalid_step", "The AI provider returned an invalid step");
+        if (e instanceof ProviderError && e.kind === "invalid") {
+          log({ requestId: c.get("requestId"), event: "provider_invalid_step", reason: e.message.slice(0, 60) });
+          return error(c, 502, "invalid_step", "The AI provider returned an invalid step");
+        }
         return error(c, 502, "provider_error", "The AI provider failed");
       } finally {
         clearTimeout(timer);

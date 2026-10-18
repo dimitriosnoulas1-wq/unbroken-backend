@@ -123,7 +123,7 @@ export class GeminiProvider implements PlanProvider {
   }
 
   screenStep(req: ScreenStepRequest, signal: AbortSignal): Promise<unknown> {
-    return this.call(SCREEN_PROMPT, screenUserMessage(req), SCREEN_STEP_JSON_SCHEMA, 512, signal);
+    return this.call(SCREEN_PROMPT, screenUserMessage(req), SCREEN_STEP_JSON_SCHEMA, 2048, signal);
   }
 
   private async call(system: string, user: string, schema: unknown, maxTokens: number, signal: AbortSignal): Promise<unknown> {

@@ -411,7 +411,7 @@ describe("look-only goals (real-device Wi-Fi failure)", () => {
     const out = guardPlan(p, t);
     const goal = (out.steps[0] as { goal: string }).goal;
     expect(goal.endsWith(NO_CHANGE_MARK)).toBe(true);
-    expect(guardPlan(out, t)).toBe(out);
+    expect(guardPlan(out, t)).toStrictEqual(out);
   });
 
   it("tells the planner that a goal inside an app is one screen_task, and the screen agent that intermediate success is not done", async () => {

@@ -319,3 +319,17 @@ describe("generic screen tools", () => {
     }
   });
 });
+
+describe("multilingual names", () => {
+  it("tells the planner and the screen agent to keep names and text exactly and to treat look-alikes as candidates", async () => {
+    const { SYSTEM_PROMPT, SCREEN_PROMPT, screenUserMessage } = await import("../src/prompt.js");
+    expect(SYSTEM_PROMPT).toContain("μη μεταγράφεις ελληνικά↔λατινικά");
+    expect(SCREEN_PROMPT).toContain("Ιωάννα Εξάρχου = Ioanna Exarchou");
+    expect(SCREEN_PROMPT).toContain("≈όνομα");
+    expect(SCREEN_PROMPT).not.toContain("προτίμησε το πρώτο αποτέλεσμα");
+    const screen = "ΠΡΟΣΟΧΗ: 2 διαφορετικά ονόματα μοιάζουν με «Ιωάννα Εξάρχου».\n[1] TextView \"Ioanna Exarchou\" (πάτημα) ≈όνομα\n";
+    const { ScreenStepRequest } = await import("../src/schema.js");
+    const req = ScreenStepRequest.parse({ goal: "Στο Instagram στείλε στον/στην Ιωάννα Εξάρχου το μήνυμα «γεια»", screen, clientVersion: "2.1" });
+    expect(screenUserMessage(req)).toContain(screen.trim());
+  });
+});

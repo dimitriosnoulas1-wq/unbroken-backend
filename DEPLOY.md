@@ -6,6 +6,36 @@ read-only commands in step 0. Nothing here changes data: the backend stores
 nothing, so a deploy only replaces the code that answers `/v1/plan` and
 `/v1/screen/step`.
 
+## Cloud Shell: deploy exactly the reviewed commit
+
+Known service: `unbroken-backend`, region `europe-west1`. The usual
+`git clone …unbroken-backend` takes **main**, not a pull-request branch. To deploy a
+reviewed branch, pin it and check the commit before building:
+
+```bash
+cd ~ && rm -rf unbroken-backend-review
+git clone --branch claude/unbroken-android-completion-agnlee --single-branch \
+  https://github.com/dimitriosnoulas1-wq/unbroken-backend unbroken-backend-review
+cd unbroken-backend-review
+git rev-parse HEAD            # must equal the SHA named in the pull request / chat
+grep -c 'invalid_step_${' src/app.ts   # 2 = this build names the reason on the phone
+gcloud run services describe unbroken-backend --region europe-west1 \
+  --format="value(status.latestReadyRevisionName)"   # note it: the rollback target
+gcloud run deploy unbroken-backend --source . --region europe-west1 \
+  --no-traffic --tag candidate --quiet
+```
+
+`--source` keeps the env vars and secrets (device token hashes, model, API key);
+never pass `--set-env-vars` or `--env-vars-file`, which replace them. After the
+candidate checks in step 2: `update-traffic … --to-tags candidate=100`. Rollback:
+`update-traffic … --to-revisions <noted revision>=100`.
+
+Revisions built with `--source` record no git commit. To tell which code a
+revision runs, compare its creation time with the commit times
+(`gcloud run revisions describe <rev> --region europe-west1 --format="value(metadata.creationTimestamp)"`),
+or check the phone's error: a bare `invalid_step` means a build older than
+`ec5a680`; `invalid_step_<reason>` means `ec5a680` or newer.
+
 ## 0. Identify what will be affected (read-only)
 
 ```bash

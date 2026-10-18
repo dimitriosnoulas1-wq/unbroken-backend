@@ -333,3 +333,45 @@ describe("multilingual names", () => {
     expect(screenUserMessage(req)).toContain(screen.trim());
   });
 });
+
+describe("in-app find never becomes a web search (real-device Bauke failure)", () => {
+  const transcript = "Άνοιξε το Instagram, βρες το προφίλ του Bauke και ετοίμασε το μήνυμα \"Γεια σου, τι κάνεις;\" χωρίς να το στείλεις";
+  const goal = "Στο Instagram βρες το προφίλ του Bauke και γράψε του το μήνυμα «Γεια σου, τι κάνεις;»";
+  const modelPlan = {
+    steps: [
+      { type: "open_app", app: "instagram" },
+      { type: "web_search", query: "τον φίλο μου μπάου και στα αγγλικά γράφει μπαούκε" },
+      { type: "screen_task", goal },
+    ],
+    clarification: null, note: "", say: "",
+  };
+
+  it("drops the web search and keeps one no-send screen task with recipient and exact text", async () => {
+    const res = await (await import("../src/app.js")).createApp({ devices: registry, provider: fixed(modelPlan) })
+      .request("/v1/plan", { method: "POST", headers: auth, body: plan(transcript) });
+    expect(res.status).toBe(200);
+    const steps = ((await res.json()) as { plan: { steps: { type: string; goal?: string }[] } }).plan.steps;
+    expect(steps.map((s) => s.type)).toEqual(["open_app", "screen_task"]);
+    expect(steps[1].goal).toBe(`${goal} χωρίς να το στείλεις`);
+  });
+
+  it("guards English and Greeklish variants, and turns a send into a draft", async () => {
+    const { guardPlan, Plan } = await import("../src/schema.js");
+    const p = Plan.parse(modelPlan);
+    for (const t of ["Open Instagram, find Bauke and write «Γεια σου, τι κάνεις;» but don't send it", "anoixe to instagram vres ton Bauke, do not send"]) {
+      const out = guardPlan(p, t);
+      expect(out.steps.some((s) => s.type === "web_search")).toBe(false);
+      expect((out.steps.find((s) => s.type === "screen_task") as { goal: string }).goal.endsWith("χωρίς να το στείλεις")).toBe(true);
+    }
+    const send = Plan.parse({ steps: [{ type: "send_message", channel: "whatsapp", recipient: "Μαρία", body: "έρχομαι" }], clarification: null, note: "", say: "" });
+    expect(guardPlan(send, "γράψε στη Μαρία ότι έρχομαι, μην το στείλεις").steps[0]).toEqual({ type: "compose_message", channel: "whatsapp", recipient: "Μαρία", body: "έρχομαι" });
+  });
+
+  it("keeps a web search the user asked for, and leaves plans without an in-app task alone", async () => {
+    const { guardPlan, Plan } = await import("../src/schema.js");
+    const p = Plan.parse(modelPlan);
+    expect(guardPlan(p, "βρες στο google ποιος είναι ο Bauke και γράψε του στο Instagram").steps.some((s) => s.type === "web_search")).toBe(true);
+    const web = Plan.parse({ steps: [{ type: "web_search", query: "καιρός" }], clarification: null, note: "", say: "" });
+    expect(guardPlan(web, "βρες τον καιρό")).toBe(web);
+  });
+});

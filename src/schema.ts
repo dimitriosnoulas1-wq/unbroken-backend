@@ -50,6 +50,34 @@ export const Plan = z.object({
 });
 export type Plan = z.infer<typeof Plan>;
 
+const fold = (s: string) => s.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().replace(/ς/g, "σ");
+/** The user asked for an internet search in so many words. */
+const WEB_ASKED = /google|γκουγκλ|ιντερνετ|διαδικτυ|internet|\bweb\b|browser|chrome|ιστοσελιδ|website/;
+/** The user said the message must not be sent. */
+const NO_SEND = /χωρισ να (?:το )?στειλεισ|χωρισ αποστολη|μην (?:το )?στειλεισ|χωρισ να σταλει|without sending|don'?t send|do not send|but don'?t send/;
+export const NO_SEND_MARK = "χωρίς να το στείλεις";
+
+/**
+ * Deterministic rules on the model's plan, applied after validation:
+ * - a web search is never a substitute for finding someone inside an app: it is dropped when the
+ *   plan already has an in-app task (screen task or message) and the user did not ask for the web;
+ * - «χωρίς να το στείλεις» turns every send into a draft and marks every screen goal as no-send.
+ */
+export function guardPlan(plan: Plan, transcript: string): Plan {
+  const t = fold(transcript);
+  let steps = plan.steps;
+  const inApp = steps.some((s) => s.type === "screen_task" || s.type === "send_message" || s.type === "compose_message");
+  if (inApp && !WEB_ASKED.test(t)) steps = steps.filter((s) => s.type !== "web_search");
+  if (NO_SEND.test(t)) {
+    steps = steps.map((s): Action => {
+      if (s.type === "send_message") return { type: "compose_message", channel: s.channel, recipient: s.recipient, body: s.body };
+      if (s.type === "screen_task" && !NO_SEND.test(fold(s.goal))) return { ...s, goal: `${s.goal} ${NO_SEND_MARK}`.slice(0, 500) };
+      return s;
+    });
+  }
+  return steps === plan.steps ? plan : { ...plan, steps };
+}
+
 export const PlanRequest = z.strictObject({
   transcript: z.string().trim().min(1).max(1000),
   locale: z.string().max(16).default("el-GR"),

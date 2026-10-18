@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
-import { MediaRequest, Plan, PlanRequest, ScreenStep, ScreenStepRequest, VIDEO_ID, clampPlanOutput, clampScreenStep, toWire, unknownStepTypes, untypedStepKeys } from "./schema.js";
+import { guardPlan, MediaRequest, Plan, PlanRequest, ScreenStep, ScreenStepRequest, VIDEO_ID, clampPlanOutput, clampScreenStep, toWire, unknownStepTypes, untypedStepKeys } from "./schema.js";
 import { NoMediaResolver, ProviderError, type MediaResolver, type PlanProvider } from "./providers.js";
 import { DeviceRegistry, RateLimiter } from "./security.js";
 
@@ -159,7 +159,7 @@ export function createApp(deps: AppDeps) {
         });
         return error(c, 502, "invalid_plan", "The AI provider returned an invalid plan");
       }
-      return c.json({ requestId: c.get("requestId"), plan: toWire(plan.data) });
+      return c.json({ requestId: c.get("requestId"), plan: toWire(guardPlan(plan.data, parsed.data.transcript)) });
     },
   );
 

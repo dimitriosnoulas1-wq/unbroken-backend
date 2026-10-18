@@ -38,7 +38,8 @@ export class OpenAICompatibleProvider implements PlanProvider {
   }
 
   screenStep(req: ScreenStepRequest, signal: AbortSignal): Promise<unknown> {
-    return this.call(SCREEN_PROMPT, screenUserMessage(req), "unbroken_screen_step", SCREEN_STEP_JSON_SCHEMA, 400, signal);
+    // Same budget as Gemini: a reasoning model spends tokens before the JSON, and 400 cut the step off (finish_reason "length").
+    return this.call(SCREEN_PROMPT, screenUserMessage(req), "unbroken_screen_step", SCREEN_STEP_JSON_SCHEMA, 2048, signal);
   }
 
   private async call(system: string, user: string, name: string, schema: unknown, maxTokens: number, signal: AbortSignal): Promise<unknown> {
@@ -68,9 +69,14 @@ export class OpenAICompatibleProvider implements PlanProvider {
       throw new ProviderError("network", "upstream");
     }
     if (!res.ok) throw new ProviderError(`status ${res.status}`, "upstream");
-    const body = (await res.json()) as { choices?: { message?: { content?: string; refusal?: string } }[] };
-    const content = body.choices?.[0]?.message?.content;
-    if (typeof content !== "string") throw new ProviderError("no content", "invalid");
+    const body = (await res.json()) as { choices?: { finish_reason?: string; message?: { content?: string | null; refusal?: string | null } }[] };
+    const choice = body.choices?.[0];
+    // Name why there is no usable JSON, so the phone shows a code that can be diagnosed (no content is ever echoed).
+    if (typeof choice?.message?.refusal === "string" && choice.message.refusal) throw new ProviderError("refusal", "invalid");
+    if (choice?.finish_reason === "length") throw new ProviderError("finish length", "invalid");
+    if (choice?.finish_reason === "content_filter") throw new ProviderError("finish content_filter", "invalid");
+    const content = choice?.message?.content;
+    if (typeof content !== "string" || !content.trim()) throw new ProviderError("no content", "invalid");
     try {
       return JSON.parse(content);
     } catch {

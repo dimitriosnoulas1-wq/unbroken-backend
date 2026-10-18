@@ -222,3 +222,44 @@ describe("unsupported message channel", () => {
     }
   });
 });
+
+describe("Instagram send: confirmation to first screen step (real-device 502 invalid_step)", () => {
+  const transcript = "Στο Instagram στείλε στην Ιωάννα Εξάρχου το μήνυμα «τι κάνεις»";
+  const ok = (content: unknown, finish = "stop") =>
+    new Response(JSON.stringify({ choices: [{ finish_reason: finish, message: { content: typeof content === "string" ? content : JSON.stringify(content) } }] }));
+
+  async function flow(screenReply: () => Response) {
+    const { OpenAICompatibleProvider } = await import("../src/providers.js");
+    const fakeFetch = (async (_u: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body));
+      if (body.response_format.json_schema.name === "unbroken_plan") {
+        return ok({ steps: [{ type: "send_message", channel: "instagram", recipient: "Ιωάννα Εξάρχου", body: "τι κάνεις" }], clarification: null, note: "", say: "" });
+      }
+      return screenReply();
+    }) as unknown as typeof fetch;
+    const a = createApp({ devices: registry, provider: new OpenAICompatibleProvider({ baseUrl: "https://x", apiKey: "k", model: "m", fetch: fakeFetch }) });
+    const planRes = await a.request("/v1/plan", { method: "POST", headers: auth, body: plan(transcript) });
+    expect(planRes.status).toBe(200);
+    const steps = ((await planRes.json()) as { plan: { steps: { type: string; goal: string }[] } }).plan.steps;
+    expect(steps.map((s) => s.type)).toEqual(["screen_task"]);
+    expect(steps[0].goal).toBe("Στο instagram στείλε στον/στην Ιωάννα Εξάρχου το μήνυμα «τι κάνεις»");
+    // What the phone sends right after «ναι»: step 0, the launcher screen.
+    const screenBody = JSON.stringify({
+      goal: steps[0].goal, app: "com.sec.android.app.launcher", step: 0,
+      screen: "[0] TextView \"Instagram\" (πάτημα)\n[1] TextView \"Messenger\" (πάτημα)\n", history: [], apps: ["Instagram", "Messenger"], clientVersion: "2.0.8",
+    });
+    return a.request("/v1/screen/step", { method: "POST", headers: auth, body: screenBody });
+  }
+
+  it("runs the first step when the model answers", async () => {
+    const res = await flow(() => ok({ action: "open_app", node: -1, text: "", app: "Instagram", say: "" }));
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { step: { action: string } }).step.action).toBe("open_app");
+  });
+
+  it("names the cause when the model's reply is cut off, and never claims a step", async () => {
+    const res = await flow(() => ok("", "length"));
+    expect(res.status).toBe(502);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe("invalid_step_finish_length");
+  });
+});

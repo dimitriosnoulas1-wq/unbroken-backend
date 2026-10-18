@@ -263,3 +263,37 @@ describe("Instagram send: confirmation to first screen step (real-device 502 inv
     expect(((await res.json()) as { error: { code: string } }).error.code).toBe("invalid_step_finish_length");
   });
 });
+
+describe("screen step free-text fields (production invalid_step_say:invalid_type)", () => {
+  const body = JSON.stringify({ goal: "Στο Instagram γράψε στον/στην Ιωάννα Εξάρχου το μήνυμα «γεια» χωρίς να το στείλεις", app: "com.instagram.android", step: 0, screen: "[0] TextView \"Instagram\" (πάτημα)\n", clientVersion: "2.0.8" });
+  const appWith = (output: unknown) => createApp({ devices: registry, provider: { name: "t", plan: async () => ({}), screenStep: async () => output } as PlanProvider });
+  const post = (output: unknown) => appWith(output).request("/v1/screen/step", { method: "POST", headers: auth, body });
+
+  it("accepts a valid step with say", async () => {
+    const res = await post({ action: "done", node: -1, text: "", app: "", say: "Το έγραψα." });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { step: { say: string } }).step.say).toBe("Το έγραψα.");
+  });
+
+  it("treats a missing or null say/text/app as empty", async () => {
+    for (const out of [{ action: "tap", node: 3 }, { action: "tap", node: 3, text: null, app: null, say: null }]) {
+      const res = await post(out);
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as { step: unknown }).step).toEqual({ action: "tap", node: 3, text: "", app: "", say: "" });
+    }
+  });
+
+  it("still rejects wrong types and malformed steps with a specific code", async () => {
+    const cases: [unknown, string][] = [
+      [{ action: "tap", node: 3, text: "", app: "", say: 42 }, "invalid_step_say:invalid_type"],
+      [{ action: "tap", node: 3, text: "", app: "", say: { x: 1 } }, "invalid_step_say:invalid_type"],
+      [{ action: "press_send", node: 3, text: "", app: "", say: "" }, "invalid_step_action:invalid_value"],
+      [{ node: 3, text: "", app: "", say: "" }, "invalid_step_action:invalid_value"],
+    ];
+    for (const [out, code] of cases) {
+      const res = await post(out);
+      expect(res.status).toBe(502);
+      expect(((await res.json()) as { error: { code: string } }).error.code).toBe(code);
+    }
+  });
+});

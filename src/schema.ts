@@ -365,6 +365,9 @@ export const SCREEN_STEP_JSON_SCHEMA = {
 export function clampScreenStep(output: unknown): unknown {
   if (typeof output !== "object" || output === null) return output;
   const o = { ...(output as Record<string, unknown>) };
+  // Gemini leaves out or nulls the free-text fields it has nothing for (seen in production as
+  // invalid_step_say:invalid_type). Only missing/null becomes ""; any other wrong type still fails validation.
+  for (const k of ["text", "app", "say"]) if (o[k] === undefined || o[k] === null) o[k] = "";
   o.text = clip(o.text, 500);
   o.say = clip(o.say, 200);
   o.app = clip(o.app, 80);

@@ -193,3 +193,18 @@ describe("invented action types", () => {
     expect(body.plan.steps.map((s) => s.type)).toEqual(["show_draft"]);
   });
 });
+
+describe("unsupported message channel", () => {
+  it("drops the send step and explains instead of rejecting the plan", async () => {
+    const { clampPlanOutput, Plan } = await import("../src/schema.js");
+    const out = Plan.safeParse(clampPlanOutput({
+      steps: [{ type: "send_message", channel: "instagram", recipient: "Ιωάννα", body: "γεια" }, { type: "open_app", app: "instagram" }],
+      clarification: null, note: "", say: "",
+    }));
+    expect(out.success).toBe(true);
+    if (out.success) {
+      expect(out.data.steps.map((s) => s.type)).toEqual(["open_app"]);
+      expect(out.data.say).toContain("Δεν μπορώ");
+    }
+  });
+});

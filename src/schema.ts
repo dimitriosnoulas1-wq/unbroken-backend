@@ -272,12 +272,21 @@ export function clampPlanOutput(output: unknown): unknown {
     const hasSay = typeof original.say === "string" && original.say.trim().length > 0;
     if (!anyKnown && !hasSay) return output;
   }
+  let unsupportedChannel = false;
   plan.say = clip(plan.say, 300);
   plan.note = clip(plan.note, 300);
   if (Array.isArray(plan.steps)) {
     // An invented action type can never run on the phone: drop that step and keep the valid ones.
     plan.steps = plan.steps
-      .filter((st) => typeof st === "object" && st !== null && KNOWN_STEP_TYPES.has(String((st as { type?: unknown }).type)))
+      .filter((st) => {
+        if (typeof st !== "object" || st === null || !KNOWN_STEP_TYPES.has(String((st as { type?: unknown }).type))) return false;
+        const t = (st as { type?: string; channel?: unknown });
+        if ((t.type === "send_message" || t.type === "compose_message") && !(CHANNELS as readonly string[]).includes(String(t.channel))) {
+          unsupportedChannel = true; // e.g. Instagram DMs: not something the phone can do
+          return false;
+        }
+        return true;
+      })
       .map((step) => {
       if (typeof step !== "object" || step === null) return step;
       const s = { ...(step as Record<string, unknown>) };
@@ -290,6 +299,9 @@ export function clampPlanOutput(output: unknown): unknown {
       }
       return s;
     });
+  }
+  if (unsupportedChannel && !(typeof plan.say === "string" && plan.say.trim())) {
+    plan.say = "Δεν μπορώ ακόμα να στείλω μήνυμα σε αυτή την εφαρμογή. Μπορώ να την ανοίξω.";
   }
   const c = plan.clarification;
   if (typeof c === "object" && c !== null) plan.clarification = { ...(c as Record<string, unknown>), question: clip((c as Record<string, unknown>).question, 300) };

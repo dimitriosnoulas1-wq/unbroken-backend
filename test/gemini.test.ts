@@ -229,3 +229,22 @@ describe("flat Gemini steps", () => {
     expect(out.steps).toEqual([{ type: "send_message", channel: "messenger", recipient: "Νίκο", body: "γεια" }]);
   });
 });
+
+describe("screen step", () => {
+  it("returns one validated step and rejects a bad one", async () => {
+    const device = newDeviceToken();
+    const good = (async () =>
+      geminiResponse(JSON.stringify({ action: "tap", node: 3, text: "", app: "", say: "" }))) as unknown as typeof fetch;
+    const app = createApp({ devices: new DeviceRegistry(`phone:${device.hash}`), provider: provider(good) });
+    const body = JSON.stringify({ goal: "άνοιξε το προφίλ", app: "com.facebook.katana", step: 1, screen: "[3] button \"Προφίλ\"", clientVersion: "2.1.0" });
+    const headers = { authorization: `Bearer ${device.token}`, "content-type": "application/json" };
+    const res = await app.request("/v1/screen/step", { method: "POST", headers, body });
+    expect(res.status).toBe(200);
+    expect((await res.json()).step).toEqual({ action: "tap", node: 3, text: "", app: "", say: "" });
+
+    const bad = (async () => geminiResponse(JSON.stringify({ action: "shell", node: 1, text: "", app: "", say: "" }))) as unknown as typeof fetch;
+    const app2 = createApp({ devices: new DeviceRegistry(`phone:${device.hash}`), provider: provider(bad) });
+    const res2 = await app2.request("/v1/screen/step", { method: "POST", headers, body });
+    expect(res2.status).toBe(502);
+  });
+});

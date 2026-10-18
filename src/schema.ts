@@ -28,6 +28,8 @@ export const Action = z.discriminatedUnion("type", [
   z.object({ type: z.literal("delete_email"), query: text(300) }),
   z.object({ type: z.literal("create_reminder"), title: text(200), startIso: z.string().max(40) }),
   z.object({ type: z.literal("show_draft"), kind: z.enum(DRAFT_KINDS), title: text(120), text: text(6000).min(1) }),
+  /** Anything else that can be done by looking at the screen and tapping/typing (the phone confirms the goal first). */
+  z.object({ type: z.literal("screen_task"), goal: text(500).min(1) }),
 ]);
 export type Action = z.infer<typeof Action>;
 
@@ -118,6 +120,7 @@ export const PLAN_JSON_SCHEMA = {
           obj("delete_email", { query: str }),
           obj("create_reminder", { title: str, startIso: str }),
           obj("show_draft", { kind: { type: "string", enum: DRAFT_KINDS }, title: str, text: str }),
+          obj("screen_task", { goal: str }),
         ],
       },
     },
@@ -155,8 +158,9 @@ const STEP_FIELDS: Record<string, string[]> = {
   delete_email: ["query"],
   create_reminder: ["title", "startIso"],
   show_draft: ["kind", "title", "text"],
+  screen_task: ["goal"],
 };
-const FLAT_FIELDS = ["app", "query", "channel", "recipient", "body", "target", "platform", "text", "contact", "number", "title", "startIso", "kind"];
+const FLAT_FIELDS = ["app", "query", "channel", "recipient", "body", "target", "platform", "text", "contact", "number", "title", "startIso", "kind", "goal"];
 const flatStep = {
   type: "object",
   required: ["type", ...FLAT_FIELDS],
@@ -178,6 +182,7 @@ export function untypedStepKeys(output: unknown): string[] {
 /** Last resort when the model omits `type`: the field names say which action it meant. */
 export function inferStepType(raw: Record<string, unknown>): string | undefined {
   const has = (k: string) => typeof raw[k] === "string" && (raw[k] as string).length > 0;
+  if (has("goal")) return "screen_task";
   if (has("recipient") && has("body")) return "send_message";
   if (has("contact") || has("number")) return "dial";
   if (has("startIso")) return "create_reminder";
@@ -242,6 +247,7 @@ const CLAMPS: Record<string, number> = {
   body: 3000,
   query: 300,
   question: 300,
+  goal: 500,
 };
 const clip = (value: unknown, max: number): unknown => {
   if (typeof value !== "string" || value.length <= max) return value;
@@ -251,7 +257,7 @@ const clip = (value: unknown, max: number): unknown => {
 };
 const KNOWN_STEP_TYPES = new Set([
   "open_app", "media_search", "web_search", "compose_message", "send_message", "navigate",
-  "share_post", "dial", "delete_email", "create_reminder", "show_draft",
+  "share_post", "dial", "delete_email", "create_reminder", "show_draft", "screen_task",
 ]);
 /** Names of steps the model invented (action names only, never content), for diagnostics. */
 export function unknownStepTypes(output: unknown): string[] {
@@ -272,21 +278,22 @@ export function clampPlanOutput(output: unknown): unknown {
     const hasSay = typeof original.say === "string" && original.say.trim().length > 0;
     if (!anyKnown && !hasSay) return output;
   }
-  let unsupportedChannel = false;
   plan.say = clip(plan.say, 300);
   plan.note = clip(plan.note, 300);
   if (Array.isArray(plan.steps)) {
     // An invented action type can never run on the phone: drop that step and keep the valid ones.
     plan.steps = plan.steps
-      .filter((st) => {
-        if (typeof st !== "object" || st === null || !KNOWN_STEP_TYPES.has(String((st as { type?: unknown }).type))) return false;
-        const t = (st as { type?: string; channel?: unknown });
-        if ((t.type === "send_message" || t.type === "compose_message") && !(CHANNELS as readonly string[]).includes(String(t.channel))) {
-          unsupportedChannel = true; // e.g. Instagram DMs: not something the phone can do
-          return false;
+      .map((st) => {
+        // A message on a channel the phone has no direct route for (Instagram, Telegram…) becomes a screen task.
+        if (typeof st !== "object" || st === null) return st;
+        const m = st as { type?: string; channel?: unknown; recipient?: unknown; body?: unknown };
+        if ((m.type === "send_message" || m.type === "compose_message") && !(CHANNELS as readonly string[]).includes(String(m.channel))) {
+          const where = String(m.channel ?? "").slice(0, 30);
+          return { type: "screen_task", goal: `Στο ${where} στείλε στον/στην ${String(m.recipient ?? "")} το μήνυμα «${String(m.body ?? "")}»`.slice(0, 500) };
         }
-        return true;
+        return st;
       })
+      .filter((st) => typeof st === "object" && st !== null && KNOWN_STEP_TYPES.has(String((st as { type?: unknown }).type)))
       .map((step) => {
       if (typeof step !== "object" || step === null) return step;
       const s = { ...(step as Record<string, unknown>) };
@@ -295,15 +302,64 @@ export function clampPlanOutput(output: unknown): unknown {
         s.title = clip(s.title, 120);
         s.text = clip(s.text, 6000);
       } else {
-        for (const k of ["title", "body", "query", "text"]) if (k in s) s[k] = clip(s[k], CLAMPS[k] ?? 300);
+        for (const k of ["title", "body", "query", "text", "goal"]) if (k in s) s[k] = clip(s[k], CLAMPS[k] ?? 300);
       }
       return s;
     });
   }
-  if (unsupportedChannel && !(typeof plan.say === "string" && plan.say.trim())) {
-    plan.say = "Δεν μπορώ ακόμα να στείλω μήνυμα σε αυτή την εφαρμογή. Μπορώ να την ανοίξω.";
-  }
   const c = plan.clarification;
   if (typeof c === "object" && c !== null) plan.clarification = { ...(c as Record<string, unknown>), question: clip((c as Record<string, unknown>).question, 300) };
   return plan;
+}
+
+
+// ---------------------------------------------------------------------------------------
+// Screen agent: one step at a time. The phone sends what is on screen, the model picks ONE action.
+// ---------------------------------------------------------------------------------------
+export const SCREEN_ACTIONS = ["tap", "type", "enter", "scroll_down", "scroll_up", "back", "home", "open_app", "wait", "done", "fail"] as const;
+
+export const ScreenStepRequest = z.strictObject({
+  goal: z.string().trim().min(1).max(500),
+  /** Package name of the app in front. */
+  app: z.string().max(120).default(""),
+  step: z.number().int().min(0).max(60).default(0),
+  /** Compact numbered list of what is on screen, built on the phone. */
+  screen: z.string().max(9000),
+  history: z.array(z.string().max(160)).max(14).default([]),
+  /** Launchable app labels, sent on the first step. */
+  apps: z.array(z.string().max(40)).max(120).default([]),
+  clientVersion: z.string().max(40),
+});
+export type ScreenStepRequest = z.infer<typeof ScreenStepRequest>;
+
+export const ScreenStep = z.object({
+  action: z.enum(SCREEN_ACTIONS),
+  node: z.number().int().min(-1).max(2000),
+  text: z.string().max(500),
+  app: z.string().max(80),
+  say: z.string().max(200),
+});
+export type ScreenStep = z.infer<typeof ScreenStep>;
+
+export const SCREEN_STEP_JSON_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["action", "node", "text", "app", "say"],
+  properties: {
+    action: { type: "string", enum: [...SCREEN_ACTIONS] },
+    node: { type: "integer" },
+    text: str,
+    app: str,
+    say: str,
+  },
+} as const;
+
+export function clampScreenStep(output: unknown): unknown {
+  if (typeof output !== "object" || output === null) return output;
+  const o = { ...(output as Record<string, unknown>) };
+  o.text = clip(o.text, 500);
+  o.say = clip(o.say, 200);
+  o.app = clip(o.app, 80);
+  if (typeof o.node !== "number") o.node = -1;
+  return o;
 }

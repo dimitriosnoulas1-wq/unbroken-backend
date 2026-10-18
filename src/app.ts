@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
-import { MediaRequest, Plan, PlanRequest, VIDEO_ID, clampPlanOutput, toWire, unknownStepTypes, untypedStepKeys } from "./schema.js";
+import { MediaRequest, Plan, PlanRequest, ScreenStep, ScreenStepRequest, VIDEO_ID, clampPlanOutput, clampScreenStep, toWire, unknownStepTypes, untypedStepKeys } from "./schema.js";
 import { NoMediaResolver, ProviderError, type MediaResolver, type PlanProvider } from "./providers.js";
 import { DeviceRegistry, RateLimiter } from "./security.js";
 
@@ -28,8 +28,8 @@ const error = (c: Context, status: 400 | 401 | 404 | 413 | 415 | 429 | 502 | 503
 
 export function createApp(deps: AppDeps) {
   const now = deps.now ?? Date.now;
-  const minute = new RateLimiter(deps.perMinute ?? 20, 60_000, now);
-  const day = new RateLimiter(deps.perDay ?? 500, 86_400_000, now);
+  const minute = new RateLimiter(deps.perMinute ?? 60, 60_000, now);
+  const day = new RateLimiter(deps.perDay ?? 2000, 86_400_000, now);
   const authFailures = new RateLimiter(10, 60_000, now);
   const timeoutMs = deps.providerTimeoutMs ?? 20_000;
   const ip = deps.clientIp ?? (() => "unknown");
@@ -158,6 +158,50 @@ export function createApp(deps: AppDeps) {
         return error(c, 502, "invalid_plan", "The AI provider returned an invalid plan");
       }
       return c.json({ requestId: c.get("requestId"), plan: toWire(plan.data) });
+    },
+  );
+
+  app.post(
+    "/v1/screen/step",
+    bodyLimit({ maxSize: 24 * 1024, onError: (c) => error(c, 413, "too_large", "Request body too large") }),
+    async (c) => {
+      if (!(c.req.header("content-type") ?? "").includes("application/json")) {
+        return error(c, 415, "unsupported_media_type", "Expected application/json");
+      }
+      if (!deps.provider.screenStep) return error(c, 503, "screen_unavailable", "The screen agent is not available with this provider");
+      let raw: unknown;
+      try {
+        raw = await c.req.json();
+      } catch {
+        return error(c, 400, "bad_json", "Body is not valid JSON");
+      }
+      const parsed = ScreenStepRequest.safeParse(raw);
+      if (!parsed.success) return error(c, 400, "bad_request", "Request does not match the schema");
+
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      let output: unknown;
+      try {
+        output = await Promise.race([
+          deps.provider.screenStep(parsed.data, controller.signal),
+          new Promise((_, reject) =>
+            controller.signal.addEventListener("abort", () => reject(new ProviderError("timeout", "timeout"))),
+          ),
+        ]);
+      } catch (e) {
+        if (e instanceof ProviderError && e.kind === "timeout") return error(c, 504, "provider_timeout", "The AI provider timed out");
+        if (e instanceof ProviderError && e.kind === "invalid") return error(c, 502, "invalid_step", "The AI provider returned an invalid step");
+        return error(c, 502, "provider_error", "The AI provider failed");
+      } finally {
+        clearTimeout(timer);
+      }
+      const step = ScreenStep.safeParse(clampScreenStep(output));
+      if (!step.success) {
+        log({ requestId: c.get("requestId"), event: "invalid_step", issues: step.error.issues.slice(0, 4).map((i) => `${i.path.join(".")}:${i.code}`) });
+        return error(c, 502, "invalid_step", "The AI provider returned an invalid step");
+      }
+      log({ requestId: c.get("requestId"), event: "screen_step", action: step.data.action, step: parsed.data.step });
+      return c.json({ requestId: c.get("requestId"), step: step.data });
     },
   );
 

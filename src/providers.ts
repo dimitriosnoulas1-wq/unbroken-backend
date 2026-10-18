@@ -1,5 +1,5 @@
-import { PLAN_JSON_SCHEMA, VIDEO_ID, expandGeminiSteps, geminiPlanSchema, type MediaRequest, type PlanRequest } from "./schema.js";
-import { SYSTEM_PROMPT, userMessage } from "./prompt.js";
+import { PLAN_JSON_SCHEMA, SCREEN_STEP_JSON_SCHEMA, VIDEO_ID, expandGeminiSteps, geminiPlanSchema, type MediaRequest, type PlanRequest, type ScreenStepRequest } from "./schema.js";
+import { SCREEN_PROMPT, SYSTEM_PROMPT, screenUserMessage, userMessage } from "./prompt.js";
 
 export const DEFAULT_GEMINI_MODEL = "gemini-3.5-flash-lite";
 export const DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
@@ -9,6 +9,8 @@ export interface PlanProvider {
   readonly name: string;
   /** Returns the raw model output; the caller validates it. */
   plan(req: PlanRequest, signal: AbortSignal): Promise<unknown>;
+  /** One step of the screen agent. Optional so simple providers (tests) need not implement it. */
+  screenStep?(req: ScreenStepRequest, signal: AbortSignal): Promise<unknown>;
 }
 
 export class ProviderError extends Error {
@@ -31,7 +33,15 @@ export class OpenAICompatibleProvider implements PlanProvider {
     private readonly opts: { baseUrl: string; apiKey: string; model: string; fetch?: typeof fetch },
   ) {}
 
-  async plan(req: PlanRequest, signal: AbortSignal): Promise<unknown> {
+  plan(req: PlanRequest, signal: AbortSignal): Promise<unknown> {
+    return this.call(SYSTEM_PROMPT, userMessage(req), "unbroken_plan", PLAN_JSON_SCHEMA, 1500, signal);
+  }
+
+  screenStep(req: ScreenStepRequest, signal: AbortSignal): Promise<unknown> {
+    return this.call(SCREEN_PROMPT, screenUserMessage(req), "unbroken_screen_step", SCREEN_STEP_JSON_SCHEMA, 400, signal);
+  }
+
+  private async call(system: string, user: string, name: string, schema: unknown, maxTokens: number, signal: AbortSignal): Promise<unknown> {
     const f = this.opts.fetch ?? fetch;
     let res: Response;
     try {
@@ -42,14 +52,14 @@ export class OpenAICompatibleProvider implements PlanProvider {
         body: JSON.stringify({
           model: this.opts.model,
           temperature: 0.2,
-          max_tokens: 1500,
+          max_tokens: maxTokens,
           messages: [
-            { role: "system", content: SYSTEM_PROMPT },
-            { role: "user", content: userMessage(req) },
+            { role: "system", content: system },
+            { role: "user", content: user },
           ],
           response_format: {
             type: "json_schema",
-            json_schema: { name: "unbroken_plan", strict: true, schema: PLAN_JSON_SCHEMA },
+            json_schema: { name, strict: true, schema },
           },
         }),
       });
@@ -109,8 +119,15 @@ export class GeminiProvider implements PlanProvider {
   }
 
   async plan(req: PlanRequest, signal: AbortSignal): Promise<unknown> {
+    return expandGeminiSteps(await this.call(SYSTEM_PROMPT, userMessage(req), geminiPlanSchema(), 2048, signal));
+  }
+
+  screenStep(req: ScreenStepRequest, signal: AbortSignal): Promise<unknown> {
+    return this.call(SCREEN_PROMPT, screenUserMessage(req), SCREEN_STEP_JSON_SCHEMA, 512, signal);
+  }
+
+  private async call(system: string, user: string, schema: unknown, maxTokens: number, signal: AbortSignal): Promise<unknown> {
     const f = this.opts.fetch ?? fetch;
-    const schema = geminiPlanSchema();
     const send = async (withThinking: boolean): Promise<Response> => {
       try {
         return await f(this.endpoint, {
@@ -118,10 +135,10 @@ export class GeminiProvider implements PlanProvider {
           signal,
           headers: { "content-type": "application/json", "x-goog-api-key": this.apiKey },
           body: JSON.stringify({
-            systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-            contents: [{ role: "user", parts: [{ text: userMessage(req) }] }],
+            systemInstruction: { parts: [{ text: system }] },
+            contents: [{ role: "user", parts: [{ text: user }] }],
             generationConfig: {
-              maxOutputTokens: 2048,
+              maxOutputTokens: maxTokens,
               responseMimeType: "application/json",
               responseFormat: { text: { mimeType: "APPLICATION_JSON", schema } },
               ...(withThinking ? { thinkingConfig: { thinkingLevel: "low" } } : {}),
@@ -156,7 +173,7 @@ export class GeminiProvider implements PlanProvider {
       throw new ProviderError(blocked ? "blocked" : "no content", "invalid");
     }
     try {
-      return expandGeminiSteps(JSON.parse(text));
+      return JSON.parse(text);
     } catch {
       throw new ProviderError("not json", "invalid");
     }

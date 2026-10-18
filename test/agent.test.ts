@@ -297,3 +297,25 @@ describe("screen step free-text fields (production invalid_step_say:invalid_type
     }
   });
 });
+
+describe("generic screen tools", () => {
+  const body = JSON.stringify({ goal: "Βρες καφετέρια κοντά μου", app: "com.sec.android.app.launcher", step: 0, screen: "", clientVersion: "2.0.9" });
+  const post = (output: unknown) =>
+    createApp({ devices: registry, provider: { name: "t", plan: async () => ({}), screenStep: async () => output } as PlanProvider })
+      .request("/v1/screen/step", { method: "POST", headers: auth, body });
+
+  it("accepts long_press, swipes and an https open_url", async () => {
+    for (const out of [
+      { action: "long_press", node: 2 }, { action: "swipe_left", node: -1 }, { action: "swipe_right", node: -1 },
+      { action: "open_url", node: -1, text: "https://www.google.com/maps/search/καφετέρια" },
+    ]) expect((await post(out)).status).toBe(200);
+  });
+
+  it("rejects open_url without a plain http(s) address", async () => {
+    for (const text of ["", "intent://x#Intent;end", "javascript:alert(1)", "file:///sdcard/a", "https://user:pw@evil.example/", "https://a b.com"]) {
+      const res = await post({ action: "open_url", node: -1, text, app: "", say: "" });
+      expect(res.status).toBe(502);
+      expect(((await res.json()) as { error: { code: string } }).error.code).toBe("invalid_step_text:custom");
+    }
+  });
+});

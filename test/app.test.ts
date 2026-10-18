@@ -248,5 +248,30 @@ describe("OpenAI-compatible provider", () => {
     const p = new OpenAICompatibleProvider({ baseUrl: "https://x", apiKey: "k", model: "m", fetch: fakeFetch });
     await expect(p.plan({ transcript: "a", locale: "el-GR", history: [], clientVersion: "1" }, new AbortController().signal)).rejects.toMatchObject({ kind: "upstream" });
   });
-});
 
+  it("gives the screen step the same output budget as the plan needs, not 400", async () => {
+    let sent: RequestInit | undefined;
+    const fakeFetch = (async (_url: string, init: RequestInit) => {
+      sent = init;
+      return new Response(JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: JSON.stringify({ action: "wait", node: -1, text: "", app: "", say: "" }) } }] }));
+    }) as unknown as typeof fetch;
+    const p = new OpenAICompatibleProvider({ baseUrl: "https://x", apiKey: "k", model: "m", fetch: fakeFetch });
+    await p.screenStep({ goal: "g", app: "", step: 0, screen: "", history: [], apps: [], clientVersion: "1" }, new AbortController().signal);
+    expect(JSON.parse(String(sent!.body)).max_tokens).toBe(2048);
+  });
+
+  it("names a cut-off, refused or empty reply instead of a generic failure", async () => {
+    const reply = (choice: unknown) => (async () => new Response(JSON.stringify({ choices: [choice] }))) as unknown as typeof fetch;
+    const req = { goal: "g", app: "", step: 0, screen: "", history: [], apps: [], clientVersion: "1" };
+    const cases: [unknown, string][] = [
+      [{ finish_reason: "length", message: { content: "{\"action\": \"ta" } }, "finish length"],
+      [{ finish_reason: "length", message: { content: "" } }, "finish length"],
+      [{ finish_reason: "stop", message: { content: null, refusal: "no" } }, "refusal"],
+      [{ finish_reason: "stop", message: { content: "" } }, "no content"],
+    ];
+    for (const [choice, reason] of cases) {
+      const p = new OpenAICompatibleProvider({ baseUrl: "https://x", apiKey: "k", model: "m", fetch: reply(choice) });
+      await expect(p.screenStep(req, new AbortController().signal)).rejects.toMatchObject({ kind: "invalid", message: reason });
+    }
+  });
+});

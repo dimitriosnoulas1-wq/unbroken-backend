@@ -23,6 +23,8 @@ export interface AppDeps {
 
 type Vars = { Variables: { device: string; requestId: string } };
 
+const tag = (s: string) => s.replace(/[^A-Za-z0-9_.:-]+/g, "_").slice(0, 40);
+
 const error = (c: Context, status: 400 | 401 | 404 | 413 | 415 | 429 | 502 | 503 | 504, code: string, message: string) =>
   c.json({ error: { code, message } }, status);
 
@@ -195,7 +197,7 @@ export function createApp(deps: AppDeps) {
         if (e instanceof ProviderError && e.kind === "timeout") return error(c, 504, "provider_timeout", "The AI provider timed out");
         if (e instanceof ProviderError && e.kind === "invalid") {
           log({ requestId: c.get("requestId"), event: "provider_invalid_step", reason: e.message.slice(0, 60) });
-          return error(c, 502, "invalid_step", "The AI provider returned an invalid step");
+          return error(c, 502, `invalid_step_${tag(e.message)}`, "The AI provider returned an invalid step");
         }
         return error(c, 502, "provider_error", "The AI provider failed");
       } finally {
@@ -204,7 +206,7 @@ export function createApp(deps: AppDeps) {
       const step = ScreenStep.safeParse(clampScreenStep(output));
       if (!step.success) {
         log({ requestId: c.get("requestId"), event: "invalid_step", issues: step.error.issues.slice(0, 4).map((i) => `${i.path.join(".")}:${i.code}`) });
-        return error(c, 502, "invalid_step", "The AI provider returned an invalid step");
+        return error(c, 502, `invalid_step_${tag(step.error.issues[0]?.path.join(".") + ":" + step.error.issues[0]?.code)}`, "The AI provider returned an invalid step");
       }
       log({ requestId: c.get("requestId"), event: "screen_step", action: step.data.action, step: parsed.data.step });
       return c.json({ requestId: c.get("requestId"), step: step.data });

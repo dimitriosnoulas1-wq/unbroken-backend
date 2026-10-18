@@ -402,3 +402,21 @@ describe("suspend and resume (ask)", () => {
     expect(SCREEN_PROMPT).not.toContain("κάνε fail και γράψε στο say τα ονόματα");
   });
 });
+
+describe("look-only goals (real-device Wi-Fi failure)", () => {
+  it("marks every screen goal no-change when the user forbade changes, once", async () => {
+    const { guardPlan, Plan, NO_CHANGE_MARK } = await import("../src/schema.js");
+    const t = "Άνοιξε τις Ρυθμίσεις του κινητού και δείξε μου τα διαθέσιμα δίκτυα Wi-Fi. Μην αλλάξεις καμία ρύθμιση και μη συνδεθείς σε κανένα δίκτυο.";
+    const p = Plan.parse({ steps: [{ type: "screen_task", goal: "Στις Ρυθμίσεις δείξε τα δίκτυα Wi-Fi" }], clarification: null, note: "", say: "" });
+    const out = guardPlan(p, t);
+    const goal = (out.steps[0] as { goal: string }).goal;
+    expect(goal.endsWith(NO_CHANGE_MARK)).toBe(true);
+    expect(guardPlan(out, t)).toBe(out);
+  });
+
+  it("tells the planner that a goal inside an app is one screen_task, and the screen agent that intermediate success is not done", async () => {
+    const { SYSTEM_PROMPT, SCREEN_PROMPT } = await import("../src/prompt.js");
+    expect(SYSTEM_PROMPT).toContain("open_app ΜΟΝΟ όταν ο χρήστης θέλει απλώς να ανοίξει την εφαρμογή");
+    expect(SCREEN_PROMPT).toContain("ΔΕΝ είναι ολοκλήρωση");
+  });
+});

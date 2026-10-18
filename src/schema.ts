@@ -56,6 +56,9 @@ const WEB_ASKED = /google|γκουγκλ|ιντερνετ|διαδικτυ|inter
 /** The user said the message must not be sent. */
 const NO_SEND = /χωρισ να (?:το )?στειλεισ|χωρισ αποστολη|μην (?:το )?στειλεισ|χωρισ να σταλει|without sending|don'?t send|do not send|but don'?t send/;
 export const NO_SEND_MARK = "χωρίς να το στείλεις";
+/** The user asked to look only. Same wording as the phone's PlanGuard, which ScreenGuard enforces on switches. */
+const NO_CHANGE = /μην (?:αλλαξεισ|πειραξεισ|συνδεθεισ|ενεργοποιησεισ|απενεργοποιησεισ)|μη (?:συνδεθεισ|αλλαξεισ)|χωρισ να (?:αλλαξεισ|πειραξεισ|συνδεθεισ)|don'?t (?:change|connect|modify)|do not (?:change|connect|modify)|without changing/;
+export const NO_CHANGE_MARK = "χωρίς να αλλάξεις καμία ρύθμιση και χωρίς να συνδεθείς πουθενά";
 
 /**
  * Deterministic rules on the model's plan, applied after validation:
@@ -74,6 +77,9 @@ export function guardPlan(plan: Plan, transcript: string): Plan {
       if (s.type === "screen_task" && !NO_SEND.test(fold(s.goal))) return { ...s, goal: `${s.goal} ${NO_SEND_MARK}`.slice(0, 500) };
       return s;
     });
+  }
+  if (NO_CHANGE.test(t)) {
+    steps = steps.map((s): Action => (s.type === "screen_task" && !NO_CHANGE.test(fold(s.goal)) ? { ...s, goal: `${s.goal} ${NO_CHANGE_MARK}`.slice(0, 500) } : s));
   }
   return steps === plan.steps ? plan : { ...plan, steps };
 }
